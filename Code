@@ -1,0 +1,64 @@
+!pip install gradio
+
+import tensorflow as tf
+from transformers import TFGPT2LMHeadModel, GPT2Tokenizer
+import gradio as gr
+
+# Load the GPT-2 tokenizer and model
+tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+tokenizer.pad_token = tokenizer.eos_token
+model = TFGPT2LMHeadModel.from_pretrained('gpt2', pad_token_id=tokenizer.eos_token_id)
+
+data = [
+    "Once upon a time, in a distant land, a young prince embarked on a journey.",
+    "The sun dipped below the horizon, casting long shadows across the valley.",
+    "In a world run by machines, one girl discovered the key to freedom.",
+    "Deep beneath the ocean, a hidden city thrived without human knowledge.",
+    "He opened the old book, and the pages glowed with a strange blue light."
+]
+
+with open("story.txt", "w") as f:
+    for paragraph in data:
+        f.write(paragraph + "\n\n")
+
+# Tokenize the dataset
+inputs = tokenizer(data, return_tensors='tf', max_length=512, truncation=True, padding='max_length')
+
+# Prepare the dataset for training
+train_dataset = tf.data.Dataset.from_tensor_slices((inputs['input_ids'], inputs['input_ids'])).shuffle(1000).batch(1)
+
+# Define optimizer using tf.keras.optimizers.Adam
+optimizer = tf.keras.optimizers.Adam(learning_rate=5e-5)
+
+# Training loop
+epochs = 3
+for epoch in range(epochs):
+    print(f"Epoch {epoch+1}/{epochs}")
+    for step, (input_ids, labels) in enumerate(train_dataset):
+        with tf.GradientTape() as tape:
+            logits = model(input_ids, labels=labels)[1]
+            loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits))
+        gradients = tape.gradient(loss, model.trainable_variables)
+        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+        if step % 100 == 0:
+            print(f"Step {step}, Loss: {loss.numpy()}")
+
+def generate_text(inp):
+    input_ids = tokenizer.encode(inp, return_tensors='tf')
+    beam_output = model.generate(input_ids, max_length=100, num_beams=5, no_repeat_ngram_size=2, early_stopping=True)
+    output = tokenizer.decode(beam_output[0], skip_special_tokens=True, clean_up_tokenization_spaces=True)
+    return ".".join(output.split(".")[:-1]) + "."
+
+# Create the Gradio interface
+iface = gr.Interface(
+    fn=generate_text,
+    inputs=gr.Textbox(lines=2, placeholder="Enter a sentence here..."),
+    outputs=gr.Textbox(),
+    title="Fine-Tuned GPT-2 Text Generation",
+    description="Fine-tuned GPT-2 is an unsupervised language model that can generate coherent text in the style and structure of your custom dataset. "
+                "Go ahead and input a sentence and see what it completes it with! "
+                "Takes around 20s to run"
+)
+
+# Launch the interface
+iface.launch()
